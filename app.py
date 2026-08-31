@@ -137,12 +137,18 @@ def main():
         with col_call:
             st.subheader(f"🟢 CALL — broke above DC({dc_length})")
             df = st.session_state["calls_df"]
-            st.dataframe(df, use_container_width=True, hide_index=True) if not df.empty else st.info("No call breakouts.")
+            if not df.empty:
+                st.dataframe(df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No call breakouts.")
 
         with col_put:
             st.subheader(f"🔴 PUT — broke below DC({dc_length})")
             df = st.session_state["puts_df"]
-            st.dataframe(df, use_container_width=True, hide_index=True) if not df.empty else st.info("No put breakdowns.")
+            if not df.empty:
+                st.dataframe(df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No put breakdowns.")
 
         errors_df = st.session_state["errors_df"]
         if not errors_df.empty:
