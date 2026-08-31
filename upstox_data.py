@@ -83,10 +83,14 @@ def get_recent_candles(
     access_token: str,
     interval_minutes: int = 5,
     min_candles_needed: int = 56,
+    intraday_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Combine historical + intraday candles into one ascending-time series with
-    at least `min_candles_needed` rows where possible, deduplicated on timestamp."""
-    intraday_df = fetch_intraday_candles(instrument_key, access_token, interval_minutes)
+    at least `min_candles_needed` rows where possible, deduplicated on timestamp.
+    Pass `intraday_df` if you've already fetched it (e.g. to also read the day's
+    open price) to avoid an extra API call."""
+    if intraday_df is None:
+        intraday_df = fetch_intraday_candles(instrument_key, access_token, interval_minutes)
 
     combined = intraday_df
     if len(combined) < min_candles_needed:
@@ -95,6 +99,52 @@ def get_recent_candles(
         combined = combined.drop_duplicates(subset="timestamp").sort_values("timestamp").reset_index(drop=True)
 
     return combined
+
+
+def fetch_previous_close(instrument_key: str, access_token: str, lookback_days: int = 10) -> float | None:
+    """Previous trading day's closing price, via the daily-candle endpoint.
+    The daily historical endpoint only returns completed days (never today),
+    so the last row is exactly 'previous close'."""
+    to_date = dt.date.today().isoformat()
+    from_date = (dt.date.today() - dt.timedelta(days=lookback_days)).isoformat()
+    url = f"{BASE_URL}/{quote(instrument_key, safe='')}/days/1/{to_date}/{from_date}"
+    resp = requests.get(url, headers=_headers(access_token), timeout=REQUEST_TIMEOUT)
+    if resp.status_code != 200:
+        raise UpstoxAPIError(f"{instrument_key}: previous-close fetch failed ({resp.status_code}) {resp.text[:200]}")
+    data = resp.json()
+    df = _candles_to_df(data.get("data", {}).get("candles", []))
+    if df.empty:
+        return None
+    return float(df.iloc[-1]["close"])
+
+
+def get_day_open(intraday_df: pd.DataFrame) -> float | None:
+    """Today's opening price = open of the first (earliest) candle of the day."""
+    if intraday_df.empty:
+        return None
+    return float(intraday_df.iloc[0]["open"])
+
+
+def passes_gap_filter(
+    signal: str,
+    day_open: float | None,
+    prev_close: float | None,
+    gap_min: float = 3.0,
+    gap_max: float = 5.0,
+) -> bool:
+    """
+    CALL: today's open must be gap_min-gap_max rupees ABOVE previous day's close.
+    PUT:  today's open must be gap_min-gap_max rupees BELOW previous day's close.
+    """
+    if day_open is None or prev_close is None:
+        return False
+    if signal == "CALL":
+        gap = day_open - prev_close
+    elif signal == "PUT":
+        gap = prev_close - day_open
+    else:
+        return False
+    return gap_min <= gap <= gap_max
 
 
 def donchian_breakout_signal(df: pd.DataFrame, dc_length: int = 55) -> dict:

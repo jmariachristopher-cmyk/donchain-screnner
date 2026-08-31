@@ -23,12 +23,22 @@ import pandas as pd
 import streamlit as st
 
 from nifty200 import Nifty200FetchError, fetch_nifty200
-from upstox_data import UpstoxAPIError, donchian_breakout_signal, get_recent_candles
+from upstox_data import (
+    UpstoxAPIError,
+    donchian_breakout_signal,
+    fetch_intraday_candles,
+    fetch_previous_close,
+    get_day_open,
+    get_recent_candles,
+    passes_gap_filter,
+)
 
 st.set_page_config(page_title="Donchian(55) 5-min Screener", layout="wide")
 
 DEFAULT_DC_LENGTH = 55
 DEFAULT_INTERVAL_MIN = 5
+DEFAULT_GAP_MIN = 3.0
+DEFAULT_GAP_MAX = 5.0
 FALLBACK_WATCHLIST_PATH = "watchlist.csv"  # used only if the live NSE fetch fails
 
 
@@ -65,7 +75,14 @@ def get_access_token() -> str:
     return token_input.strip() or token
 
 
-def run_screener(watchlist: pd.DataFrame, access_token: str, dc_length: int, interval_minutes: int):
+def run_screener(
+    watchlist: pd.DataFrame,
+    access_token: str,
+    dc_length: int,
+    interval_minutes: int,
+    gap_min: float,
+    gap_max: float,
+):
     calls, puts, errors = [], [], []
     progress = st.progress(0.0, text="Scanning...")
     total = len(watchlist)
@@ -74,26 +91,43 @@ def run_screener(watchlist: pd.DataFrame, access_token: str, dc_length: int, int
         symbol = getattr(row, "symbol")
         instrument_key = getattr(row, "instrument_key")
         try:
-            df = get_recent_candles(
+            intraday_df = fetch_intraday_candles(instrument_key, access_token, interval_minutes)
+            day_open = get_day_open(intraday_df)
+
+            combined_df = get_recent_candles(
                 instrument_key, access_token,
                 interval_minutes=interval_minutes,
                 min_candles_needed=dc_length + 1,
+                intraday_df=intraday_df,
             )
-            result = donchian_breakout_signal(df, dc_length=dc_length)
+            result = donchian_breakout_signal(combined_df, dc_length=dc_length)
+
             if result is None:
                 errors.append({"symbol": symbol, "reason": "Not enough candle history yet"})
-            elif result["signal"] == "CALL":
-                calls.append({
-                    "Symbol": symbol, "Close": round(result["close"], 2),
-                    "Upper DC": round(result["upper_dc"], 2),
-                    "Candle": result["candle_time"].strftime("%H:%M"),
-                })
-            elif result["signal"] == "PUT":
-                puts.append({
-                    "Symbol": symbol, "Close": round(result["close"], 2),
-                    "Lower DC": round(result["lower_dc"], 2),
-                    "Candle": result["candle_time"].strftime("%H:%M"),
-                })
+                progress.progress((i + 1) / total, text=f"Scanning... {symbol}")
+                continue
+            if result["signal"] is None:
+                progress.progress((i + 1) / total, text=f"Scanning... {symbol}")
+                continue
+
+            prev_close = fetch_previous_close(instrument_key, access_token)
+            if not passes_gap_filter(result["signal"], day_open, prev_close, gap_min, gap_max):
+                progress.progress((i + 1) / total, text=f"Scanning... {symbol}")
+                continue
+
+            gap = (day_open - prev_close) if result["signal"] == "CALL" else (prev_close - day_open)
+            row_out = {
+                "Symbol": symbol, "Close": round(result["close"], 2),
+                "Open": round(day_open, 2), "Prev Close": round(prev_close, 2),
+                "Gap": round(gap, 2),
+                "Candle": result["candle_time"].strftime("%H:%M"),
+            }
+            if result["signal"] == "CALL":
+                row_out["Upper DC"] = round(result["upper_dc"], 2)
+                calls.append(row_out)
+            else:
+                row_out["Lower DC"] = round(result["lower_dc"], 2)
+                puts.append(row_out)
         except UpstoxAPIError as e:
             errors.append({"symbol": symbol, "reason": str(e)})
         progress.progress((i + 1) / total, text=f"Scanning... {symbol}")
@@ -111,6 +145,13 @@ def main():
     with st.sidebar:
         dc_length = st.number_input("Donchian length", min_value=5, max_value=200, value=DEFAULT_DC_LENGTH)
         interval_minutes = st.number_input("Candle interval (min)", min_value=1, max_value=60, value=DEFAULT_INTERVAL_MIN)
+        st.markdown("**Gap filter (vs previous day's close)**")
+        gap_col1, gap_col2 = st.columns(2)
+        with gap_col1:
+            gap_min = st.number_input("Min ₹ gap", min_value=0.0, value=DEFAULT_GAP_MIN, step=0.5)
+        with gap_col2:
+            gap_max = st.number_input("Max ₹ gap", min_value=0.0, value=DEFAULT_GAP_MAX, step=0.5)
+        st.caption("CALL needs open ₹ gap-up vs prev close; PUT needs open ₹ gap-down vs prev close, both within this range.")
         if st.button("🔄 Refresh Nifty 200 list"):
             load_nifty200_cached.clear()
         run_clicked = st.button("🔍 Run Screener", type="primary", use_container_width=True)
@@ -125,7 +166,9 @@ def main():
 
     if run_clicked:
         st.session_state["last_run"] = time.strftime("%Y-%m-%d %H:%M:%S")
-        calls_df, puts_df, errors_df = run_screener(watchlist, access_token, dc_length, interval_minutes)
+        calls_df, puts_df, errors_df = run_screener(
+            watchlist, access_token, dc_length, interval_minutes, gap_min, gap_max
+        )
         st.session_state["calls_df"] = calls_df
         st.session_state["puts_df"] = puts_df
         st.session_state["errors_df"] = errors_df

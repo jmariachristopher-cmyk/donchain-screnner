@@ -40,14 +40,27 @@ against Upstox's instrument master file is needed).
   the bundled `watchlist.csv` and shows a warning — swap in your own
   symbols there if that happens repeatedly.
 
-## 3. Run locally
+## 3. Gap filter
+
+On top of the Donchian breakout, results are only shown if the day's
+*opening* price gapped away from the *previous day's close* by a
+configurable ₹ range (default 3–5):
+
+- **CALL** needs `today's open − previous close` between 3 and 5.
+- **PUT** needs `previous close − today's open` between 3 and 5.
+
+Previous close comes from Upstox's daily-candle endpoint (last completed
+trading day); today's open comes from the first 5-min candle of the day.
+Adjust the ₹ range in the sidebar.
+
+## 4. Run locally
 
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## 4. Push to GitHub
+## 5. Push to GitHub
 
 ```bash
 git init
@@ -61,7 +74,7 @@ git push -u origin main
 `.gitignore` already excludes `.streamlit/secrets.toml` so your token never
 gets committed.
 
-## 5. Deploy on Streamlit Community Cloud
+## 6. Deploy on Streamlit Community Cloud
 
 1. Go to https://share.streamlit.io and sign in with GitHub.
 2. "New app" → select your repo/branch → main file path `app.py`.
