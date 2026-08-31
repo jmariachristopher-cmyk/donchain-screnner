@@ -22,17 +22,33 @@ import time
 import pandas as pd
 import streamlit as st
 
+from nifty200 import Nifty200FetchError, fetch_nifty200
 from upstox_data import UpstoxAPIError, donchian_breakout_signal, get_recent_candles
 
 st.set_page_config(page_title="Donchian(55) 5-min Screener", layout="wide")
 
 DEFAULT_DC_LENGTH = 55
 DEFAULT_INTERVAL_MIN = 5
+FALLBACK_WATCHLIST_PATH = "watchlist.csv"  # used only if the live NSE fetch fails
 
 
-@st.cache_data(ttl=60, show_spinner=False)
-def load_watchlist(path: str = "watchlist.csv") -> pd.DataFrame:
-    return pd.read_csv(path)
+@st.cache_data(ttl=86400, show_spinner=False)  # Nifty 200 rebalances rarely; refresh at most daily
+def load_nifty200_cached() -> pd.DataFrame:
+    return fetch_nifty200()
+
+
+def get_watchlist() -> pd.DataFrame:
+    """Nifty 200 constituents, auto-fetched from NSE and mapped to Upstox
+    instrument keys. Falls back to the bundled watchlist.csv only if the
+    live fetch fails (e.g. NSE temporarily blocking the request)."""
+    try:
+        return load_nifty200_cached()
+    except Nifty200FetchError as e:
+        st.warning(
+            f"Couldn't fetch the live Nifty 200 list from NSE ({e}). "
+            f"Using the bundled fallback watchlist instead."
+        )
+        return pd.read_csv(FALLBACK_WATCHLIST_PATH)
 
 
 def get_access_token() -> str:
@@ -95,11 +111,12 @@ def main():
     with st.sidebar:
         dc_length = st.number_input("Donchian length", min_value=5, max_value=200, value=DEFAULT_DC_LENGTH)
         interval_minutes = st.number_input("Candle interval (min)", min_value=1, max_value=60, value=DEFAULT_INTERVAL_MIN)
-        watchlist_file = st.file_uploader("Watchlist CSV (symbol, instrument_key)", type="csv")
+        if st.button("🔄 Refresh Nifty 200 list"):
+            load_nifty200_cached.clear()
         run_clicked = st.button("🔍 Run Screener", type="primary", use_container_width=True)
-        st.caption("CSV format: two columns — `symbol`, `instrument_key` (e.g. NSE_EQ|INE002A01018)")
 
-    watchlist = pd.read_csv(watchlist_file) if watchlist_file else load_watchlist()
+    watchlist = get_watchlist()
+    st.sidebar.caption(f"Universe: Nifty 200 · {len(watchlist)} symbols loaded (auto-fetched from NSE)")
 
     if not access_token:
         st.warning("Enter your Upstox access token in the sidebar to run the screener.")

@@ -24,17 +24,21 @@ regenerated each morning:
 > semi-automated TOTP-based login) if you want this fully hands-off — that's
 > outside the scope of this screener but worth building as a companion script.
 
-## 2. Get correct instrument keys
+## 2. Watchlist: Nifty 200 (auto-fetched)
 
-`watchlist.csv` ships with a few example rows — **verify these against
-Upstox's instrument master file** before trusting them, symbols/ISINs can
-change:
+The app automatically pulls the current Nifty 200 constituent list from
+NSE's official index CSV (`ind_nifty200list.csv`) and converts each stock's
+ISIN into its Upstox instrument key (`NSE_EQ|<ISIN>` — this is Upstox's
+documented, fixed key format for NSE equities, so no separate lookup
+against Upstox's instrument master file is needed).
 
-- Full instrument list: https://assets.upstox.com/market-quote/instruments/exchange/complete.json.gz
-- Filter for your exchange (`NSE_EQ`, `NSE_FO`, `NSE_INDEX`, etc.) and match on `trading_symbol`.
-
-Edit `watchlist.csv` (or upload your own CSV in the app sidebar) with your
-own two columns: `symbol`, `instrument_key`.
+- The list is cached for 24 hours (Nifty 200 rebalances only twice a year);
+  use the **"🔄 Refresh Nifty 200 list"** button in the sidebar to force a
+  re-fetch.
+- If NSE ever blocks the request (their site occasionally rate-limits
+  requests from cloud IPs like Streamlit Cloud's), the app falls back to
+  the bundled `watchlist.csv` and shows a warning — swap in your own
+  symbols there if that happens repeatedly.
 
 ## 3. Run locally
 
